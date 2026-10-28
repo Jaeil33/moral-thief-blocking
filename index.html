@@ -186,6 +186,20 @@ h1 { font-family: var(--f-display); font-weight: 700; font-size: clamp(30px, 4.6
 .ln .q { display: inline-block; font-family: var(--f-mono); font-style: normal; font-size: 11px; color: var(--brass); border: 1px solid var(--brass); padding: 0 5px; margin-right: 8px; line-height: 1.55; }
 .ln.mine { background: color-mix(in srgb, var(--brass) 12%, transparent); }
 
+/* 3D 뷰어 (Unity WebGL) — 버튼을 눌러야 내려받는다 */
+.three { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--ink); }
+.three h2 { font-family: var(--f-display); font-weight: 500; font-size: 20px; margin: 0 0 8px; }
+.three > p { margin: 0 0 14px; font-size: 13.5px; color: var(--muted); max-width: 64ch; }
+.three-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; font-size: 14px; }
+.three-ctl button { border: 1px solid var(--ink); padding: 7px 16px; color: var(--ink); }
+.three-ctl button:hover { background: var(--ink); color: var(--paper); }
+.three-ctl a { color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--rule); }
+.three-ctl a:hover { color: var(--ink); border-bottom-color: var(--ink); }
+.three-state { font-size: 12.5px; color: var(--faint); }
+.three-frame { margin-top: 16px; border: 1px solid var(--rule); background: var(--sheet); }
+.three-frame iframe { display: block; width: 100%; height: min(72vh, 680px); border: 0; }
+@media (max-width: 720px) { .three-frame iframe { height: 62vh; } }
+
 /* 끝 부분 */
 .end { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--ink); display: grid; gap: 28px 48px; grid-template-columns: minmax(0, 1fr); }
 @media (min-width: 900px) { .end { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); } }
@@ -241,6 +255,19 @@ h1 { font-family: var(--f-display); font-weight: 700; font-size: clamp(30px, 4.6
     </section>
     <section class="sheet" id="sheet" aria-live="polite"></section>
   </main>
+
+  <section class="three" aria-label="3D 리허설 뷰어">
+    <h2>3D 리허설 뷰어</h2>
+    <p>위 눈금자와 같은 동선 데이터를 Unity(URP)로 무대에 세운 것입니다. beat를 고르면 3D도 같은 지점으로 따라오고, 3D에서 넘기면 이 페이지가 따라옵니다.</p>
+    <div class="three-ctl">
+      <button type="button" id="three-open">3D 뷰어 열기</button>
+      <a id="three-tab" href="3d/" target="_blank" rel="noopener">새 탭에서 열기 &#8599;</a>
+      <span class="three-state mono" id="three-state">처음 열 때 한 번 내려받습니다</span>
+    </div>
+    <div class="three-frame" id="three-frame" hidden>
+      <iframe id="three-iframe" title="3D 리허설 뷰어" loading="lazy"></iframe>
+    </div>
+  </section>
 
   <section class="end">
     <div>
@@ -539,10 +566,72 @@ h1 { font-family: var(--f-display); font-weight: 700; font-size: clamp(30px, 4.6
     idx = i;
     try { history.replaceState(null, "", "#" + D.beats[i].id); } catch (e) {}
     render();
+    V3.push(D.beats[i].id);
   }
+  // ---------- 3D 뷰어 (Unity WebGL) 연동 ----------
+  // 동기화 키는 beat id. Unity 쪽 steps[].beatId 와 같은 60개·같은 순서임을 확인하고 골랐다.
+  // 빌드가 수십 MB라서 자동으로 불러오지 않는다 — 버튼을 눌러야 iframe에 src가 들어간다.
+  const V3 = (() => {
+    const frame = document.getElementById("three-frame");
+    const ifr = document.getElementById("three-iframe");
+    const btn = document.getElementById("three-open");
+    const tab = document.getElementById("three-tab");
+    const st = document.getElementById("three-state");
+    let loaded = false, ready = false, sent = null, echo = null, watch = 0;
+
+    const url = (beatId) => "3d/?beat=" + encodeURIComponent(beatId);
+
+    btn.addEventListener("click", () => {
+      if (!loaded) {
+        loaded = true;
+        ifr.src = url(D.beats[idx].id);
+        frame.hidden = false;
+        btn.textContent = "3D 뷰어 접기";
+        st.textContent = "불러오는 중…";
+        // 빌드가 없거나 WebGL이 막히면 ready 가 영원히 오지 않는다 — 그때도 말은 해줘야 한다.
+        watch = setTimeout(() => {
+          if (!ready) st.textContent = "3D 뷰어가 응답하지 않습니다 — 새 탭에서 열어 보세요";
+        }, 40000);
+        return;
+      }
+      frame.hidden = !frame.hidden;
+      btn.textContent = frame.hidden ? "3D 뷰어 열기" : "3D 뷰어 접기";
+      if (!frame.hidden) push(D.beats[idx].id);
+    });
+
+    window.addEventListener("message", (e) => {
+      const d = e.data;
+      if (!d || typeof d !== "object" || d.source !== "mtb3d") return;
+      if (d.type === "ready") {
+        ready = true;
+        clearTimeout(watch);
+        st.textContent = `${d.steps} 스텝 연동됨`;
+        push(D.beats[idx].id);
+      } else if (d.type === "step") {
+        if (!d.beatId || d.beatId === sent) return;      // 내가 보낸 것이 되돌아온 것
+        const i = D.beats.findIndex((b) => b.id === d.beatId);
+        if (i >= 0 && i !== idx) { echo = d.beatId; go(i); }
+      } else if (d.type === "error") {
+        clearTimeout(watch);
+        st.textContent = "3D 뷰어를 불러오지 못했습니다";
+      }
+    });
+
+    function push(beatId) {
+      tab.href = url(beatId);                            // 새 탭 링크는 항상 현재 beat를 가리킨다
+      if (beatId === echo) { echo = null; return; }      // 3D가 알려준 beat를 되돌려보내지 않는다
+      if (!loaded || !ready || !ifr.contentWindow) return;
+      sent = beatId;
+      try { ifr.contentWindow.postMessage({ source: "mtb-book", type: "beat", beatId }, "*"); } catch (err) {}
+    }
+
+    return { push };
+  })();
+
   const hi = D.beats.findIndex((b) => b.id === (location.hash || "").slice(1));
   idx = hi >= 0 ? hi : 0;
   render();
+  V3.push(D.beats[idx].id);
 })();
 </script>
 

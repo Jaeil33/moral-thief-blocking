@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Theater Blocking — 3D 리허설 뷰어</title>
+<style>
+  /* 프롬프트 북(종이·잉크) 테마와 같은 토큰. 캔버스는 액자 없이 꽉 채운다 — iframe 안에 들어가므로. */
+  :root {
+    --paper: #f2f3ef; --ink: #1a201c; --muted: #69736c; --rule: #d9ddd6; --brass: #94721f;
+    --f-body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+    --f-mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #121614; --ink: #e2e6e2; --muted: #98a29b; --rule: #2c3430; --brass: #cfae5c;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #121614; --ink: #e2e6e2; --muted: #98a29b; --rule: #2c3430; --brass: #cfae5c;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: var(--paper); color: var(--ink); font-family: var(--f-body); }
+
+  #unity-container { position: fixed; inset: 0; }
+  /* 캔버스 크기는 Unity 가 DOM 크기에 맞춘다 — 창에 꽉 채우고 비율은 Unity 에 맡긴다. */
+  #unity-canvas { width: 100%; height: 100%; display: block; background: var(--paper); }
+  #unity-canvas:focus-visible { outline: 2px solid var(--brass); outline-offset: -2px; }
+
+  /* 로딩 */
+  #load { position: fixed; inset: 0; display: grid; place-content: center; gap: 14px;
+          justify-items: center; background: var(--paper); z-index: 10; }
+  #load p { margin: 0; font-size: 13px; color: var(--muted); letter-spacing: .02em; }
+  #load .t { font-size: 15px; color: var(--ink); }
+  #bar { width: min(260px, 62vw); height: 3px; background: var(--rule); overflow: hidden; }
+  #bar i { display: block; height: 100%; width: 0; background: var(--brass); transition: width .2s ease-out; }
+  #pct { font-family: var(--f-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* 오류 — alert() 는 쓰지 않는다. 브라우저 모달은 페이지를 멈춰 세운다. */
+  #err { position: fixed; inset: 0; display: none; place-content: center; padding: 24px;
+         background: var(--paper); z-index: 20; }
+  #err.on { display: grid; }
+  #err div { max-width: 520px; font-size: 14px; line-height: 1.7; }
+  #err b { display: block; margin-bottom: 8px; font-size: 15px; }
+  #err code { font-family: var(--f-mono); font-size: 12px; color: var(--muted);
+              display: block; margin-top: 10px; white-space: pre-wrap; word-break: break-all; }
+
+  /* 경고 리본 */
+  #warn { position: fixed; left: 0; right: 0; top: 0; z-index: 15; font-size: 12px; }
+  #warn div { padding: 7px 12px; background: var(--ink); color: var(--paper); }
+</style>
+</head>
+<body>
+
+<div id="unity-container">
+  <canvas id="unity-canvas" width="1920" height="1080" tabindex="-1"></canvas>
+</div>
+
+<div id="load">
+  <p class="t">3D 리허설 뷰어</p>
+  <div id="bar"><i></i></div>
+  <p id="pct">0%</p>
+  <p>처음 열 때만 내려받습니다 — 이후에는 브라우저가 캐시합니다</p>
+</div>
+
+<div id="warn"></div>
+
+<div id="err"><div>
+  <b>3D 뷰어를 불러오지 못했습니다</b>
+  브라우저가 WebGL 2.0 을 지원하는지, 네트워크가 막혀 있지 않은지 확인해 주세요.
+  <code id="err-msg"></code>
+</div></div>
+
+<script>
+  var canvas = document.querySelector("#unity-canvas");
+  var loadEl = document.querySelector("#load");
+  var barEl  = document.querySelector("#bar i");
+  var pctEl  = document.querySelector("#pct");
+
+  function showError(msg) {
+    loadEl.style.display = "none";
+    document.querySelector("#err-msg").textContent = String(msg || "");
+    document.querySelector("#err").classList.add("on");
+    try { window.parent.postMessage({ source: "mtb3d", type: "error", message: String(msg) }, "*"); } catch (e) {}
+  }
+
+  // 기본 템플릿의 unityShowBanner 자리. 모달 대신 얇은 리본으로 띄운다.
+  function unityShowBanner(msg, type) {
+    var host = document.querySelector("#warn");
+    var div = document.createElement("div");
+    div.textContent = msg;
+    if (type === "error") { showError(msg); return; }
+    host.appendChild(div);
+    setTimeout(function () { if (div.parentNode) div.parentNode.removeChild(div); }, 5000);
+  }
+
+  var buildUrl = "Build";
+  var loaderUrl = buildUrl + "/WebGL.loader.js";
+  var config = {
+    arguments: [],
+    dataUrl: buildUrl + "/WebGL.data.unityweb",
+    frameworkUrl: buildUrl + "/WebGL.framework.js.unityweb",
+    codeUrl: buildUrl + "/WebGL.wasm.unityweb",
+    streamingAssetsUrl: "StreamingAssets",
+    companyName: "DefaultCompany",
+    productName: "Theater Blocking",
+    productVersion: "0.1.0",
+    showBanner: unityShowBanner,
+  };
+
+
+  // ───────────────────────────── 바깥 페이지와의 연결
+  //
+  // 프롬프트 북이 beat 를 고르면 postMessage 로 알려 온다. Unity 인스턴스가
+  // 준비되기 전에 온 것은 마지막 하나만 들고 있다가 준비된 직후에 넘긴다.
+
+  var unityInstance = null;
+  var pending = null;
+
+  function relay(beatId) {
+    if (!beatId) return;
+    if (!unityInstance) { pending = beatId; return; }
+    try { unityInstance.SendMessage("WebBridge", "GoToBeat", String(beatId)); } catch (e) {}
+  }
+
+  window.addEventListener("message", function (e) {
+    var d = e.data;
+    if (!d || typeof d !== "object") return;
+    if (d.source === "mtb3d") return;                 // 내가 보낸 것은 되돌려받지 않는다
+    if (d.source !== "mtb-book") return;              // 프롬프트 북이 보낸 것만 받는다
+    if (d.type === "beat") relay(d.beatId);
+    else if (d.type === "play" && unityInstance) {
+      try { unityInstance.SendMessage("WebBridge", "SetPlaying", d.on ? "1" : "0"); } catch (err) {}
+    } else if (d.type === "theme") {
+      document.documentElement.setAttribute("data-theme", d.value === "dark" ? "dark" : "light");
+    }
+  });
+
+  var script = document.createElement("script");
+  script.src = loaderUrl;
+  script.onerror = function () { showError("로더 스크립트를 내려받지 못했습니다: " + loaderUrl); };
+  script.onload = function () {
+    createUnityInstance(canvas, config, function (progress) {
+      var p = Math.round(progress * 100);
+      barEl.style.width = p + "%";
+      pctEl.textContent = p + "%";
+    }).then(function (instance) {
+      unityInstance = instance;
+      loadEl.style.display = "none";
+      canvas.focus();
+      if (pending) { relay(pending); pending = null; }
+    }).catch(function (message) {
+      showError(message);                              // alert() 금지 — 모달은 페이지를 멈춘다
+    });
+  };
+  document.body.appendChild(script);
+</script>
+</body>
+</html>
